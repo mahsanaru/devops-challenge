@@ -1,0 +1,125 @@
+---
+- name: Vault Initialization
+  hosts: localhost
+  connection: local
+  vars:
+    vault_addr: "http://localhost:8200"
+    vault_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+
+  vars_prompt:
+    - name: "postgres_username"
+      prompt: "Enter PostgreSQL username"
+      private: yes
+    - name: "postgres_password"
+      prompt: "Enter PostgreSQL password"
+      private: yes
+
+  tasks:
+    # Move the VAULT_TOKEN check to its own task
+    - name: Check for VAULT_TOKEN environment variable
+      fail:
+        msg: "VAULT_TOKEN environment variable is not set or empty. Please set it before running the playbook."
+      when: vault_token is not defined or vault_token == ''
+
+    - name: Enable KV v2 secrets engine
+      uri:
+        url: "{{ vault_addr }}/v1/sys/mounts/postgres_secret"
+        method: POST
+        headers:
+          "X-Vault-Token": "{{ vault_token }}"
+        body_format: json
+        body:
+          type: kv
+          options:
+            version: 2
+      ignore_errors: yes
+
+    - name: Seed PostgreSQL credentials
+      uri:
+        url: "{{ vault_addr }}/v1/postgres_secret/data/postgres"
+        method: POST
+        headers:
+          "X-Vault-Token": "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            username: "{{ postgres_username }}"
+            password: "{{ postgres_password }}"
+          options:
+            # Set to prevent accidental overwrites.
+            cas: 0
+        status_code: 200 
+      register: seed_credentials_result
+      failed_when: >
+        seed_credentials_result.status != 200 and
+        not (seed_credentials_result.status == 400 and
+             'errors' in seed_credentials_result.json and
+             'check-and-set parameter did not match the current version' in seed_credentials_result.json.errors | join(''))
+
+    - name: Display credential seeding status
+      debug:
+        msg: "Credential seeding status for 'postgres_secret/data/postgres': {{ seed_credentials_result.status }}"
+      when: seed_credentials_result.status == 200
+
+    - name: Create policy for backend
+      uri:
+        url: "{{ vault_addr }}/v1/sys/policies/acl/backend-policy"
+        method: PUT
+        headers:
+          "X-Vault-Token": "{{ vault_token }}"
+        body_format: json
+        body:
+          policy: |
+            path "postgres_secret/data/postgres" {
+              capabilities = ["read"]
+            }
+        status_code: 204
+
+    - name: Enable AppRole authentication method in Vault
+      uri:
+        url: "{{ vault_addr }}/v1/sys/auth/approle"
+        method: POST
+        headers:
+          "X-Vault-Token": "{{ vault_token }}"
+        body_format: json
+        body:
+          type: approle
+      ignore_errors: yes
+
+    - name: Create AppRole for backend
+      uri:
+        url: "{{ vault_addr }}/v1/auth/approle/role/backend-role"
+        method: POST
+        headers:
+          "X-Vault-Token": "{{ vault_token }}"
+        body_format: json
+        body:
+          token_policies: "backend-policy"
+          token_ttl: 4h
+        status_code: 204
+
+    - name: Fetch Role ID
+      uri:
+        url: "{{ vault_addr }}/v1/auth/approle/role/backend-role/role-id"
+        method: GET
+        headers:
+          "X-Vault-Token": "{{ vault_token }}"
+        return_content: yes
+      register: role_id
+
+    - name: Generate Secret ID
+      uri:
+        url: "{{ vault_addr }}/v1/auth/approle/role/backend-role/secret-id"
+        method: POST
+        headers:
+          "X-Vault-Token": "{{ vault_token }}"
+        return_content: yes
+      register: secret_id
+
+    - name: Save Role ID and Secret ID to file
+      copy:
+        dest: "./app/vault_credentials.env"
+        content: |
+          VAULT_ROLE_ID={{ role_id.json.data.role_id }}
+          VAULT_SECRET_ID={{ secret_id.json.data.secret_id }}
+          
