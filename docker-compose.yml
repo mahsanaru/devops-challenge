@@ -1,0 +1,96 @@
+services:
+  vault-server:
+    image: hashicorp/vault:1.20
+    restart: unless-stopped
+    command: vault server -config=/vault/config/vault.hcl
+    volumes:
+      - ./vault/config:/vault/config
+      - ./vault/data:/vault/data
+    ports:
+      - "8200:8200/tcp"
+    environment:
+      VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
+    cap_add:
+      - IPC_LOCK
+    container_name: vault-server
+    networks:
+      - internal
+    healthcheck: 
+      test: ["CMD", "vault", "status", "-address=http://localhost:8200"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s 
+
+  db:
+    image: postgres:15
+    container_name: postgres_db
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - internal
+    healthcheck: 
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  traefik:
+    image: traefik:v3.4
+    container_name: traefik
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--api.dashboard=false"
+      - "--accesslog=true"
+      - "--log.level=DEBUG"
+      - "--entrypoints.websecure.http.tls=true"
+      - "--providers.file.filename=/etc/traefik/dynamic_conf.yml"
+      - "--providers.file.watch=true"
+    ports:
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefik/certs/:/certs/:ro
+      - ./traefik/dynamic_conf.yml:/etc/traefik/dynamic_conf.yml
+    networks:
+      - internal
+
+  backend:
+    build:
+      context: app/backend
+      dockerfile: ../../backend.Dockerfile
+    container_name: backend
+    restart: always
+    env_file:
+      - ./app/vault_credentials.env
+      - ./vault.env
+    environment:
+      VAULT_URL: http://vault-server:8200
+      DB_PORT: 5432
+      DB_HOST: db
+    networks:
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`app.localhost`)"
+      - "traefik.http.routers.app.entrypoints=websecure"
+      - "traefik.http.services.app.loadbalancer.server.port=3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data: 
+  vault-data:
+
+networks:
+  internal:
+    driver: bridge
