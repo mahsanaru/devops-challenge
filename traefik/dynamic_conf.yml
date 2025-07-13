@@ -1,13 +1,4 @@
-http:
-  routers:
-    backend:
-      rule: "Host(`backend.localhost`)"
-      service: backend
-      entryPoints:
-        - securedocker-compose up --build -d
-
-  services:
-    backend:
-      loadBalancer:
-        servers:
-          - url: "http://backend:3000"
+tls:
+  certificates:
+    - certFile: /certs/traefik.crt
+      keyFile: /certs/traefik.key

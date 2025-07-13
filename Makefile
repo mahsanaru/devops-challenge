@@ -1,4 +1,12 @@
 up:
+	@echo "Adding 127.0.0.1 app.localhost to /etc/hosts if not present..."
+	@if ! grep -q "127.0.0.1 app.localhost" /etc/hosts; then \
+		echo "127.0.0.1 app.localhost" | sudo tee -a /etc/hosts > /dev/null; \
+		echo "Entry added."; \
+	else \
+		echo "Entry already exists."; \
+	fi
+	
 	@echo "--- CREATE DB Credentials ---"
 	@echo "POSTGRES_USER=backend_user" > .env
 	@echo "POSTGRES_PASSWORD=$(shell openssl rand -hex 12)" >> .env
