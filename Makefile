@@ -6,7 +6,10 @@ up:
 	else \
 		echo "Entry already exists."; \
 	fi
-	
+
+	@echo "--- CREATE vault env file ---"
+	touch app/vault_credentials.env app/vault_init.env
+
 	@echo "--- CREATE DB Credentials ---"
 	@echo "POSTGRES_USER=backend_user" > .env
 	@echo "POSTGRES_PASSWORD=$(shell openssl rand -hex 12)" >> .env
@@ -14,9 +17,10 @@ up:
 
 	@echo "--- Starting Vault, DB, Traefik ---"
 	docker compose up -d vault-server db traefik
+	@echo "--- Waiting for Vault to start (10 seconds) ---"
+	sleep 5
 
 	@echo "--- Running Ansible playbook to configure Vault ---"
-	@echo "Enter PostgreSQL username and password."
 	ansible-playbook setup.yml
 
 	@echo "--- Ansible playbook finished. Starting backend service ---"
@@ -26,12 +30,19 @@ up:
 	@echo "You can check status with: docker compose ps"
 
 down:
-	docker-compose down
+	@echo "--- removing all services and volumes ---"
+	docker compose down --volumes
 
 logs:
+	@echo "--- Showing container logs ---"
 	docker-compose logs -f
-
-setup:
-	ansible-playbook setup.yml
 	
-# test:
+test:
+	@echo "Checking health of https://app.localhost/api/health..."
+	@status=$$(curl -s -o /dev/null -w "%{http_code}" -k https://app.localhost/api/health); \
+	if [ "$$status" -eq 200 ]; then \
+		echo "healthy"; \
+	else \
+		echo "unhealthy (status $$status)"; \
+		exit 1; \
+	fi
