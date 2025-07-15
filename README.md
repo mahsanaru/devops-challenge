@@ -1,21 +1,38 @@
-## Project Setup Instructions
 
-This guide will walk you through setting up and running the entire application stack locally using Docker Compose, Ansible, and Make.
+# 💼 Senior DevOps Challenge Documentation
 
-### 1\. Prerequisites
+## 📌 Project Overview
 
-Before you begin, ensure you have the following software installed on your machine (MacOS):
+* **PostgreSQL** for persistent storage
+* **TypeScript backend** with CRUD API
+* **Vault** for dynamic secret management
+* **Traefik** as a reverse proxy and TLS terminator
 
-  * **Docker Desktop (or Docker Engine & Docker Compose):** This includes Docker Engine and Docker Compose.
-      * [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
-  * **Ansible:** Used for configuring Vault.
-      * Install via brew: `brew install ansible`
+---
 
-### 2\. Project Structure
+## 🧱 System Architecture
 
-Your project directory is structured as follows:
+**Components:**
 
-```
+* **Backend** container (TypeScript API)
+* **PostgreSQL** container
+* **Vault** (development mode for local setup)
+* **Traefik** (HTTPS reverse proxy)
+
+📌 All secrets are retrieved dynamically at runtime.
+
+
+### 🔐 Architecture Diagram — Vault Secrets Flow
+
+![App architecture](./images/architecture.jpeg "Application Architecture")
+
+
+
+---
+
+## 📁 Project Structure
+
+```sh
 project/
 ├── docker-compose.yml
 ├── Makefile
@@ -31,60 +48,134 @@ project/
 │   └── certs/                 # self-signed tls
 ```
 
-### 3\. Installation
+---
 
-Navigate to the root directory of your project in your terminal.
+## 🚀 Setup Instructions
 
-#### a. Bring Up and Configure the System
+### 1. Prerequisites
 
-The following command will orchestrate the entire setup:
+* Docker Desktop or Docker Engine & Compose
+* Ansible (`brew install ansible` on MacOS)
+* `make` CLI tool
 
-1.  Start Vault, PostgreSQL, and Traefik containers.
-2.  Wait for Vault and PostgreSQL to become healthy.
-3.  Run the Ansible playbook to configure Vault (enable AppRole, create policies, seed DB credentials, generate AppRole Role ID/Secret ID, TOKEN).
-4.  Start the Backend application, which will then use the newly generated TOKEN.
-5.  Check `backend` application exposed as `https://app.localhost` through Traefik. Note that the TLS certificates are self-signed.
+---
+
+### 2. Commands
+
+#### Start System
+
+Starts all services, configures Vault, injects secrets, and boots the backend.
 
 ```bash
 make up
 ```
 
-#### b. Bring Down the System
+#### Shut Down
 
-To stop and remove all running containers, networks, and volumes associated with your project:
-
+Stops and removes all containers, networks, and volumes.
 ```bash
 make down
 ```
+#### Check Logs
 
-#### c. Check the logs
-
-To check the logs of the running containers:
-
+To check the logs of the running containers.
 ```bash
 make logs
 ```
 
-#### c. Check the logs
+#### Run Health Check
 
-To check the logs of the running containers:
-
+Sends request to `https://app.localhost/api/health`
 ```bash
 make test
 ```
 
-### 4\. Verification
+---
 
-After running `make up` successfully:
+## 🧠 Design Decisions
 
-2.  **Test Backend Application:**
-    If your `backend` application exposes an endpoint (e.g., `https://app.localhost` through Traefik), try accessing it in your browser or via `curl` to confirm it's running and can connect to Vault/DB.
-    *(You might need to add `127.0.0.1 app.localhost` to your `/etc/hosts` file.
+These are the design decisions based on project requirement:
 
-3.  **Check Backend Logs:**
+* **Vault dev mode** chosen for simplicity and local setup but would use integrated storage + TLS in production.
+* Traefik handles all routing with HTTPS termination using self-signed TLS (local).
+* Explicit `.env` files are generated and ignored from Git to avoid credential exposure.
+* `depends_on` is set in docker compose to make sure the order of container deployment is correctly followed
+* `Makefile` starts backend container last to make sure that Vault is correctly configured with Postgres secret
+* Environment variables are set in containers through env_files to prevent hardcoding values
+* `POSTGRES_PASSWORD` value is randomly generated and saved in `.env` file through `Makefile`
 
-    ```bash
-    docker compose logs backend
-    ```
 
-    Look for messages indicating successful connection to Vault and the database.
+More detail can be found in Appendix section
+---
+
+## 🔐 Security Considerations
+
+1. All Docker images use explicitly pinned versions to prevent unexpected changes due to upstream updates.
+
+2. Traefik is configured to use HTTPS for secure communication with the backend. For local development, self-signed certificates are used but use of Let's encrypt or simmilar technologies is recommended
+
+3. Only HTTPS port for Traefik is exposed to the host. This serves as the single secure entry point for the application.
+
+4. PostgreSQL credentials are randomly generated during setup and never hardcoded or committed to the Git
+
+5. Used Least Privilege Policy that grants the backend service only read access to the secret/data/database path.
+
+6. All services (PostgreSQL, Vault, Backend, Traefik) are deployed within a dedicated Docker internal bridge network.
+
+7. PostgreSQL port 5432 is only exposed internally to the internal Docker network. It is not directly exposed to the host machine or external networks, preventing direct external database access. 
+
+8. The backend service itself does not directly expose any ports to the host machine. All external traffic is routed through Traefik.
+
+9. Vault port 8200 is exposed to the host for Ansible to interact with it during setup and for manual inspection.
+
+10. This is a local development setup but it's recommended to use TLS for Vault.
+
+---
+
+## ⚙️ Automation Details
+
+### `make up` Summary
+
+This `make up` command does the following:
+
+1. Adds 127.0.0.1 app.localhost to /etc/hosts (for TLS routing).
+2. Generates .env with POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB if not already present.
+3. Starts Vault, PostgreSQL, and Traefik containers.
+4. Executes the setup.yml Ansible playbook.
+5. Initializes Vault and unseals it
+6. Seeds DB credentials to Vault
+7. Creates a policy and AppRole
+8. Authenticates and writes AppRole token to vault_credentials.env
+9. Starts the backend service, which retrieves credentials securely from Vault.
+10. You can verify everything is working with make test or by accessing https://app.localhost/api/health.
+
+### `setup.yml` Summary
+
+This playbook does the following:
+
+1. Initializes and unseals Vault (if not already initialized)
+2. Enables KV secrets engine
+3. Seeds database credentials
+4. Defines a read-only policy for `secret/data/database`
+5. Enables and configures AppRole
+6. Retrieves Role ID & Secret ID
+7. Authenticates using AppRole and writes resulting Vault token to `vault_credentials.env`
+
+> Vault is now ready to securely serve secrets to backend via AppRole authentication.
+
+---
+
+## 📎 Appendix
+
+### Default Environment Variables (used during setup)
+
+Use the following credentials for the Postgres:
+
+```
+POSTGRES_USER=backend_user
+POSTGRES_DB=devops_challenge
+```
+
+The URL for the app is `app.localhost`
+
+The value used for VAULT_TOKEN will saved in `vault_credentials.env` file

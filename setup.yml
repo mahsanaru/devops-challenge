@@ -31,11 +31,6 @@
       when: not vault_initialized
       register: vault_init
 
-    - name: Debug vault_init output
-      when: vault_init is defined
-      debug:
-        var: vault_init.json
-
     - name: Set unseal key and root token
       when: vault_init is defined and vault_init.json is defined
       set_fact:
@@ -72,9 +67,9 @@
           type: kv
           options:
             version: 2
-      ignore_errors: yes
+        status_code: 204
 
-    - name: Load .env file content as lines
+    - name: Load .env file content as fact
       set_fact:
         env_content: "{{ lookup('file', './.env') | split('\n') }}"
 
@@ -139,7 +134,7 @@
         body_format: json
         body:
           type: approle
-      ignore_errors: yes
+        status_code: 204
 
     - name: Create AppRole for backend
       uri:
@@ -184,7 +179,7 @@
         line: "VAULT_SECRET_ID={{ secret_id.json.data.secret_id }}"
 
     - name: Authenticate with AppRole to get VAULT_TOKEN
-      ansible.builtin.uri:
+      uri:
         url: "{{ vault_addr }}/v1/auth/approle/login"
         method: POST
         body_format: json
